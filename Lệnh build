@@ -1,0 +1,1 @@
+cl /EHsc /O2 /MT alo.cpp /link Advapi32.lib User32.lib Gdi32.lib Shell32.lib Shlwapi.lib Ole32.lib Crypt32.lib Winhttp.lib Dbghelp.lib Secur32.lib Ws2_32.lib Iphlpapi.lib
